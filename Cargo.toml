@@ -14,7 +14,7 @@ default-run = "gnomon"
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
-ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core", "zeroize"] }
 libc = "0.2"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
