@@ -14,7 +14,7 @@ python3 tests/reference.py
 python3 tests/systemd.py
 ```
 
-Rust tests cover codec boundaries, arbitrary input, full-request binding, certificate/signature validation, radius/version checks, all batch sizes 1–32, unused Merkle index bits, safe interval arithmetic, evidence authentication, and key-file permissions. Independent Python/OpenSSL fixtures prevent a shared Rust signer/verifier bug from passing unnoticed. Live integration starts three temporary daemons, checks both transports, fragmented/pipelined TCP, malformed/short requests, Rust client output, chained measurements, and SIGTERM shutdown. Test clocks explicitly opt out of synchronization checks; deployment defaults require them.
+Rust tests cover codec boundaries, arbitrary input, full-request binding, certificate/signature validation, radius/version checks, all batch sizes 1–32, unused Merkle index bits, safe interval arithmetic, evidence authentication, and key-file permissions. Independent Python/OpenSSL fixtures prevent a shared Rust signer/verifier bug from passing unnoticed. Live integration starts three temporary daemons, checks both transports, fragmented/pipelined TCP, malformed/short requests, Rust client output, chained measurements, exclusive evidence files, saved malfeasance evidence from lying servers, exit on delegation expiry, and SIGTERM shutdown. Test clocks explicitly opt out of synchronization checks; deployment defaults require them.
 
 `python3 tests/reference.py --write-fixture` regenerates deterministic original fixtures. The Appendix B fixture is extracted from the RFC and carries its separate BSD notice; see `NOTICE`. Test seeds are not deployment keys.
 

@@ -2,11 +2,15 @@
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+/// Largest packet accepted or produced, including the 12-byte framing.
 pub const MAX_PACKET: usize = 4096;
+/// Packet framing prefix (RFC 10049 §5).
 pub const MAGIC: &[u8; 8] = b"ROUGHTIM";
+/// Converts a four-byte ASCII tag to its little-endian numeric value.
 pub const fn tag(bytes: &[u8; 4]) -> u32 {
     u32::from_le_bytes(*bytes)
 }
+
 pub const VER: u32 = tag(b"VER\0");
 pub const SRV: u32 = tag(b"SRV\0");
 pub const SIG: u32 = tag(b"SIG\0");
@@ -35,24 +39,35 @@ pub enum Error {
     #[error("response does not authenticate this request")]
     Proof,
 }
+
+/// Result type for codec and verification errors.
 pub type Result<T> = std::result::Result<T, Error>;
+/// Decodes an exactly four-byte little-endian value.
 pub fn u32_value(b: &[u8]) -> Result<u32> {
     Ok(u32::from_le_bytes(
         b.try_into().map_err(|_| Error::Format("uint32 length"))?,
     ))
 }
+
+/// Decodes an exactly eight-byte little-endian value.
 pub fn u64_value(b: &[u8]) -> Result<u64> {
     Ok(u64::from_le_bytes(
         b.try_into().map_err(|_| Error::Format("uint64 length"))?,
     ))
 }
+
+/// Copies a slice into an array, failing unless its length is exactly `N`.
 pub fn fixed<const N: usize>(b: &[u8]) -> Result<[u8; N]> {
     b.try_into()
         .map_err(|_| Error::Format("fixed field length"))
 }
+
+/// A decoded message: tag values borrowed from the input buffer.
 #[derive(Debug)]
 pub struct Message<'a>(BTreeMap<u32, &'a [u8]>);
 impl<'a> Message<'a> {
+    /// Decodes a message (without packet framing), validating the tag count,
+    /// tag order, and offsets (RFC 10049 §4).
     pub fn decode(data: &'a [u8]) -> Result<Self> {
         if data.len() < 8 || data.len() > MAX_PACKET {
             return Err(Error::Format("message length"));
@@ -84,13 +99,20 @@ impl<'a> Message<'a> {
         }
         Ok(Self(fields))
     }
+
+    /// Returns a tag's value, if present.
     pub fn get(&self, tag: u32) -> Option<&'a [u8]> {
         self.0.get(&tag).copied()
     }
+
+    /// Returns a tag's value, failing if it is absent.
     pub fn required(&self, tag: u32) -> Result<&'a [u8]> {
         self.get(tag).ok_or(Error::Format("missing mandatory tag"))
     }
 }
+
+/// Encodes fields as a message, sorting them by tag. Every value except the
+/// last must be a multiple of four bytes long.
 pub fn encode(mut fields: Vec<(u32, Vec<u8>)>) -> Result<Vec<u8>> {
     fields.sort_unstable_by_key(|f| f.0);
     if fields.is_empty() || fields.windows(2).any(|p| p[0].0 == p[1].0) {
@@ -118,6 +140,8 @@ pub fn encode(mut fields: Vec<(u32, Vec<u8>)>) -> Result<Vec<u8>> {
     }
     Ok(result)
 }
+
+/// Adds `ROUGHTIM` packet framing to an encoded message.
 pub fn packet(message: Vec<u8>) -> Result<Vec<u8>> {
     if message.len() + 12 > MAX_PACKET {
         return Err(Error::Format("packet too large"));
@@ -127,6 +151,8 @@ pub fn packet(message: Vec<u8>) -> Result<Vec<u8>> {
     p.extend(message);
     Ok(p)
 }
+
+/// Checks packet framing and decodes the enclosed message.
 pub fn unpack(p: &[u8]) -> Result<Message<'_>> {
     if p.len() < 12
         || p.len() > MAX_PACKET
@@ -137,6 +163,8 @@ pub fn unpack(p: &[u8]) -> Result<Message<'_>> {
     }
     Message::decode(&p[12..])
 }
+
+/// Decodes a VER/VERS list: 1–32 strictly ascending uint32 versions.
 pub fn versions(data: &[u8]) -> Result<Vec<u32>> {
     if data.is_empty() || data.len() > 128 || data.len() % 4 != 0 {
         return Err(Error::Format("version list length"));

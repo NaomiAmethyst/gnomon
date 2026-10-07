@@ -1,9 +1,11 @@
+//! Roughtime signatures, delegation, Merkle batching, and response verification.
 use crate::wire::*;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha512};
 
 const DELEGATION_CONTEXT: &[u8] = b"Roughtime v1 delegation signature\0";
 const RESPONSE_CONTEXT: &[u8] = b"Roughtime v1 response signature\0";
+/// SHA-512 over the concatenated parts, truncated to 32 bytes (RFC 10049 §5.3).
 pub fn hash(parts: &[&[u8]]) -> [u8; 32] {
     let mut h = Sha512::new();
     for p in parts {
@@ -14,12 +16,16 @@ pub fn hash(parts: &[&[u8]]) -> [u8; 32] {
     result.copy_from_slice(&output[..32]);
     result
 }
+
+/// The SRV value identifying a server by its long-term public key.
 pub fn server_id(key: &[u8; 32]) -> [u8; 32] {
     hash(&[&[0xff], key])
 }
+
 fn signed_bytes(context: &[u8], value: &[u8]) -> Vec<u8> {
     [context, value].concat()
 }
+
 fn verify(key: &[u8], signature: &[u8], context: &[u8], value: &[u8]) -> Result<()> {
     let k = VerifyingKey::from_bytes(&fixed(key)?).map_err(|_| Error::Signature)?;
     if k.is_weak() {
@@ -29,6 +35,9 @@ fn verify(key: &[u8], signature: &[u8], context: &[u8], value: &[u8]) -> Result<
     k.verify_strict(&signed_bytes(context, value), &sig)
         .map_err(|_| Error::Signature)
 }
+
+/// Signs a delegation of `online` valid from `mint` to `maxt` inclusive, and
+/// returns the encoded CERT message.
 pub fn certificate(root: &SigningKey, online: &[u8; 32], mint: u64, maxt: u64) -> Result<Vec<u8>> {
     if mint > maxt {
         return Err(Error::Format("delegation interval"));
@@ -41,6 +50,9 @@ pub fn certificate(root: &SigningKey, online: &[u8; 32], mint: u64, maxt: u64) -
     let sig = root.sign(&signed_bytes(DELEGATION_CONTEXT, &dele));
     encode(vec![(DELE, dele), (SIG, sig.to_bytes().to_vec())])
 }
+
+/// Verifies a CERT message against the long-term key. Returns the delegated
+/// online key and its validity bounds.
 pub fn check_certificate(cert: &[u8], root: &[u8; 32]) -> Result<([u8; 32], u64, u64)> {
     let c = Message::decode(cert)?;
     let d = c.required(DELE)?;
@@ -58,6 +70,9 @@ pub fn check_certificate(cert: &[u8], root: &[u8; 32]) -> Result<([u8; 32], u64,
     }
     Ok((key, mint, maxt))
 }
+
+/// Builds a 1036-byte version 1 request packet for the server identified by
+/// its long-term key.
 pub fn request(nonce: &[u8; 32], key: &[u8; 32]) -> Result<Vec<u8>> {
     // 5 tags (40 bytes) + 72 bytes of fields + 912 bytes padding = 1024.
     packet(encode(vec![
@@ -68,6 +83,9 @@ pub fn request(nonce: &[u8; 32], key: &[u8; 32]) -> Result<Vec<u8>> {
         (ZZZZ, vec![0; 912]),
     ])?)
 }
+
+/// Validates a request packet addressed to this server (or to no particular
+/// server) and returns its nonce.
 pub fn check_request(p: &[u8], key: &[u8; 32]) -> Result<[u8; 32]> {
     let m = unpack(p)?;
     if u32_value(m.required(TYPE)?)? != 0 || !versions(m.required(VER)?)?.contains(&1) {
@@ -104,6 +122,8 @@ pub fn merkle(requests: &[Vec<u8>]) -> Result<([u8; 32], Vec<Vec<u8>>)> {
     }
     Ok((level[0], paths))
 }
+
+/// A server's online signing key, its certificate, and the delegation bounds.
 pub struct Identity {
     online: SigningKey,
     cert: Vec<u8>,
@@ -111,7 +131,9 @@ pub struct Identity {
     pub mint: u64,
     pub maxt: u64,
 }
+
 impl Identity {
+    /// Fails unless the certificate is signed by `root` and delegates `online`.
     pub fn new(online: SigningKey, cert: Vec<u8>, root: [u8; 32]) -> Result<Self> {
         let (key, mint, maxt) = check_certificate(&cert, &root)?;
         if online.verifying_key().to_bytes() != key {
@@ -125,6 +147,9 @@ impl Identity {
             maxt,
         })
     }
+
+    /// Signs one SREP for a batch of up to 32 requests and returns a response
+    /// packet for each, in order.
     pub fn respond(
         &self,
         requests: &[Vec<u8>],
@@ -180,19 +205,28 @@ impl Identity {
             .collect()
     }
 }
+
+/// An authenticated MIDP/RADI pair in Unix seconds.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifiedTime {
     pub midpoint: u64,
     pub radius: u32,
 }
+
 impl VerifiedTime {
+    /// Earliest time the server could have signed the response.
     pub fn lower(&self) -> i128 {
         self.midpoint as i128 - self.radius as i128
     }
+
+    /// Latest time the server could have signed the response.
     pub fn upper(&self) -> i128 {
         self.midpoint as i128 + self.radius as i128
     }
 }
+
+/// Fully authenticates a response to `request` against the server's long-term
+/// key: certificate, signature, signed fields, nonce, and Merkle proof.
 pub fn verify_response(
     request: &[u8],
     response: &[u8],

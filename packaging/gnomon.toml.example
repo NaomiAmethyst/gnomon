@@ -5,7 +5,11 @@ certificate = "/etc/gnomon/delegation.cert"
 root_public_key = "REPLACE_WITH_BASE64_ROOT_PUBLIC_KEY"
 radius_seconds = 3
 require_synchronized_clock = true
-max_requests_per_second = 1000
+# Signatures per second. Each signature covers a batch of up to 32 requests;
+# beyond this rate requests wait in the queue and share later signatures.
+max_signatures_per_second = 1000
+# Requests per second from one IPv4 address or IPv6 /64.
+max_requests_per_second_per_source = 100
 max_connections = 128
 queue_capacity = 256
 io_timeout_seconds = 5

@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use std::{
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::{Read, Write},
     path::Path,
 };
@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 pub fn load(path: &Path) -> Result<SigningKey> {
     load_with_policy(path, false)
 }
+
 /// systemd credentials are root-owned 0440 files in a protected mount,
 /// with access granted only to the service. Ordinary key files stay 0600.
 pub(crate) fn load_credential(path: &Path) -> Result<SigningKey> {
@@ -40,6 +41,7 @@ pub(crate) fn load_credential(path: &Path) -> Result<SigningKey> {
     }
     load_with_policy(path, true)
 }
+
 fn load_with_policy(path: &Path, credential: bool) -> Result<SigningKey> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -75,6 +77,7 @@ fn load_with_policy(path: &Path, credential: bool) -> Result<SigningKey> {
     let seed = Zeroizing::new(crate::wire::fixed::<32>(&bytes)?);
     Ok(SigningKey::from_bytes(&seed))
 }
+
 pub fn create(path: &Path) -> Result<SigningKey> {
     let mut seed = Zeroizing::new([0u8; 32]);
     rand::RngCore::try_fill_bytes(&mut OsRng, &mut seed[..])
@@ -83,8 +86,14 @@ pub fn create(path: &Path) -> Result<SigningKey> {
     write_new(path, &Zeroizing::new(key.to_bytes())[..], true)?;
     Ok(key)
 }
+
 /// Never overwrite a key or certificate accidentally.
 pub fn write_new(path: &Path, data: &[u8], secret: bool) -> Result<()> {
+    write_all(&mut create_new(path, secret)?, data)
+}
+
+/// Exclusively creates an output file, failing if anything exists at `path`.
+pub fn create_new(path: &Path, secret: bool) -> Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -92,9 +101,13 @@ pub fn write_new(path: &Path, data: &[u8], secret: bool) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(if secret { 0o600 } else { 0o644 });
     }
-    let mut file = options
+    options
         .open(path)
-        .with_context(|| format!("create {}", path.display()))?;
+        .with_context(|| format!("create {}", path.display()))
+}
+
+/// Writes and flushes to stable storage.
+pub fn write_all(file: &mut File, data: &[u8]) -> Result<()> {
     file.write_all(data)?;
     file.sync_all()?;
     Ok(())

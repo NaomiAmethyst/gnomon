@@ -2,8 +2,8 @@ use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use clap::{Parser, Subcommand, ValueEnum};
 use gnomon::{
-    client::{Address, Backoff, ServerList},
-    crypto,
+    client::{Address, Backoff, Server, ServerList},
+    crypto::{self, VerifiedTime},
     evidence::{Evidence, inconsistency},
     keys,
 };
@@ -96,6 +96,52 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<T> {
     );
     Ok(serde_json::from_slice(&std::fs::read(path)?)?)
 }
+struct Chain {
+    report: Evidence,
+    times: Vec<VerifiedTime>,
+    latest_rtt: Duration,
+    inconsistency: Option<(usize, usize)>,
+}
+/// Queries each server twice in the same order, chaining every nonce to the
+/// previous response. Stops at the first authenticated causal inconsistency.
+async fn measure(servers: &[Server], timeout: Duration, attempts: u32) -> Result<Chain> {
+    let mut chain = Chain {
+        report: Evidence::default(),
+        times: Vec::new(),
+        latest_rtt: Duration::ZERO,
+        inconsistency: None,
+    };
+    let mut previous = None::<Vec<u8>>;
+    let mut backoffs: Vec<_> = servers.iter().map(|_| Backoff::default()).collect();
+    for _ in 0..2 {
+        for (s, backoff) in servers.iter().zip(&mut backoffs) {
+            let rand = random()?;
+            let nonce = match &previous {
+                Some(prev) => crypto::hash(&[prev, &rand]),
+                None => rand,
+            };
+            let key = gnomon::client::decode_key(&s.public_key)?;
+            let request = crypto::request(&nonce, &key)?;
+            let m = gnomon::client::query(&s.addresses, &key, &request, timeout, attempts, backoff)
+                .await
+                .with_context(|| format!("query {}", s.name))?;
+            chain.report.push(
+                previous.as_ref().map(|_| &rand),
+                &key,
+                &request,
+                &m.response,
+            );
+            previous = Some(m.response);
+            chain.latest_rtt = m.round_trip;
+            chain.times.push(m.time);
+            chain.inconsistency = inconsistency(&chain.times);
+            if chain.inconsistency.is_some() {
+                return Ok(chain);
+            }
+        }
+    }
+    Ok(chain)
+}
 #[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     match Args::parse().command {
@@ -173,53 +219,42 @@ async fn main() -> Result<()> {
                 "need at least {count} distinct pinned identities (minimum three)"
             );
             list.servers.truncate(count);
-            let mut report = Evidence::default();
-            let mut previous = None::<Vec<u8>>;
-            let mut times = Vec::new();
-            let mut backoffs: Vec<_> = (0..count).map(|_| Backoff::default()).collect();
-            let mut latest_rtt = Duration::ZERO;
-            for _ in 0..2 {
-                for (i, s) in list.servers.iter().enumerate() {
-                    let rand = random()?;
-                    let nonce = match &previous {
-                        Some(prev) => crypto::hash(&[prev, &rand]),
-                        None => rand,
-                    };
-                    let key = gnomon::client::decode_key(&s.public_key)?;
-                    let request = crypto::request(&nonce, &key)?;
-                    let m = gnomon::client::query(
-                        &s.addresses,
-                        &key,
-                        &request,
-                        timeout,
-                        attempts,
-                        &mut backoffs[i],
-                    )
-                    .await
-                    .with_context(|| format!("query {}", s.name))?;
-                    report.push(
-                        previous.as_ref().map(|_| &rand),
-                        &key,
-                        &request,
-                        &m.response,
-                    );
-                    previous = Some(m.response);
-                    latest_rtt = m.round_trip;
-                    times.push(m.time);
-                    if let Some((earlier, later)) = inconsistency(&times) {
-                        keys::write_new(&evidence, &serde_json::to_vec_pretty(&report)?, false)?;
-                        anyhow::bail!(
-                            "authenticated causal inconsistency between responses {earlier} and {later}; evidence saved to {}",
-                            evidence.display()
-                        );
-                    }
+            // Claim the output before querying so a malfeasance proof always has
+            // somewhere to go. Remove it if no evidence is produced.
+            let mut output = keys::create_new(&evidence, false)?;
+            let chain = match measure(&list.servers, timeout, attempts).await {
+                Ok(chain) => chain,
+                Err(error) => {
+                    drop(output);
+                    let _ = std::fs::remove_file(&evidence);
+                    return Err(error);
+                }
+            };
+            let saved = serde_json::to_vec_pretty(&chain.report)
+                .map_err(anyhow::Error::from)
+                .and_then(|json| keys::write_all(&mut output, &json));
+            if let Some((earlier, later)) = chain.inconsistency {
+                match saved {
+                    Ok(()) => anyhow::bail!(
+                        "authenticated causal inconsistency between responses {earlier} and {later}; evidence saved to {}",
+                        evidence.display()
+                    ),
+                    Err(error) => anyhow::bail!(
+                        "authenticated causal inconsistency between responses {earlier} and {later}, but saving evidence to {} failed: {error:#}",
+                        evidence.display()
+                    ),
                 }
             }
-            keys::write_new(&evidence, &serde_json::to_vec_pretty(&report)?, false)?;
-            let last = times.last().context("empty measurement")?;
+            saved?;
+            let last = chain.times.last().context("empty measurement")?;
             println!(
                 "{}",
-                serde_json::json!({"responses":times.len(),"earliestAtReceipt":times.iter().map(|t| t.lower()).max(),"latestAtReceipt":last.upper()+latest_rtt.as_secs_f64().ceil() as i128,"evidence":evidence})
+                serde_json::json!({
+                    "responses": chain.times.len(),
+                    "earliestAtReceipt": chain.times.iter().map(|t| t.lower()).max(),
+                    "latestAtReceipt": last.upper() + chain.latest_rtt.as_secs_f64().ceil() as i128,
+                    "evidence": evidence,
+                })
             );
         }
         Command::VerifyEvidence { file } => {

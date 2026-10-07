@@ -13,6 +13,7 @@ import socket
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -126,6 +127,62 @@ def free_port():
         sock.bind(("127.0.0.1",0))
         return sock.getsockname()[1]
 
+def expiry(binaries, tmp):
+    """The daemon must stop, not keep accepting work, once its delegation expires."""
+    root = Ed25519PrivateKey.from_private_bytes(bytes([60])*32)
+    online_seed = bytes([61])*32
+    online = Ed25519PrivateKey.from_private_bytes(online_seed)
+    folder = tmp / "expiry"
+    folder.mkdir()
+    (folder / "online.key").write_bytes(online_seed)
+    (folder / "online.key").chmod(0o600)
+    now = int(time.time())
+    (folder / "delegation.cert").write_bytes(certificate(root,online,now-60,now+2))
+    port = free_port()
+    (folder / "gnomon.toml").write_text(f'listen = "127.0.0.1:{port}"\nonline_key = "{folder}/online.key"\ncertificate = "{folder}/delegation.cert"\nroot_public_key = "{b64(public(root))}"\nrequire_synchronized_clock = false\n')
+    with (folder / "daemon.log").open("w") as log:
+        proc = subprocess.Popen([str(binaries / "gnomond"),"--config",str(folder / "gnomon.toml")],stdout=log,stderr=log)
+    try:
+        time.sleep(3.5)
+        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:
+            sock.sendto(request(public(root),os.urandom(32)),("127.0.0.1",port))
+        assert proc.wait(timeout=5) != 0, "daemon kept running with an expired delegation"
+        assert "delegation expired" in (folder / "daemon.log").read_text()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+def malfeasance(binaries, tmp):
+    """A lying server must produce saved, verifiable evidence."""
+    servers, sockets = [], []
+    try:
+        for i,midpoint in enumerate((2000,1000,1000)):
+            root = Ed25519PrivateKey.from_private_bytes(bytes([70+i])*32)
+            online = Ed25519PrivateKey.from_private_bytes(bytes([80+i])*32)
+            sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+            sock.bind(("127.0.0.1",0))
+            sockets.append(sock)
+            def serve(sock=sock, root=root, online=online, midpoint=midpoint):
+                while True:
+                    try:
+                        req, peer = sock.recvfrom(4096)
+                    except OSError:
+                        return
+                    sock.sendto(response(req,root,online,midpoint),peer)
+            threading.Thread(target=serve,daemon=True).start()
+            servers.append({"name":f"liar-{i}","version":1,"publicKeyType":"ed25519","publicKey":b64(public(root)),"addresses":[{"protocol":"udp","address":f"127.0.0.1:{sock.getsockname()[1]}"}]})
+        (tmp / "liars.json").write_text(json.dumps({"servers":servers}))
+        # Order is random, but each server is queried twice, so a 1000 response
+        # always follows the 2000 one.
+        result = subprocess.run([str(binaries / "gnomon"),"measure","--servers",str(tmp / "liars.json"),"--evidence",str(tmp / "malfeasance.json")],capture_output=True,text=True)
+        assert result.returncode != 0 and "causal inconsistency" in result.stderr, result.stderr
+        verified = subprocess.run([str(binaries / "gnomon"),"verify-evidence",str(tmp / "malfeasance.json")],check=True,capture_output=True,text=True)
+        assert json.loads(verified.stdout)["causalInconsistency"] is not None
+    finally:
+        for sock in sockets:
+            sock.close()
+
 def smoke(binaries, docker_image=None, docker_sudo=False):
     servers, processes = [], []
     docker = ["sudo", "-n", "docker"] if docker_sudo else ["docker"]
@@ -199,7 +256,19 @@ def smoke(binaries, docker_image=None, docker_sudo=False):
                     assert unpack(req)[b"NONC"] == h(prev,base64.b64decode(e["rand"]))
                 verify(req,resp,key)
                 prev = resp
-            print("Independent UDP/TCP, fragmentation, pipelining, malformed-packet, client, and six-response chain checks passed")
+            before = (tmp / "evidence.json").read_bytes()
+            started = time.monotonic()
+            again = subprocess.run([str(binaries / "gnomon"),"measure","--servers",str(tmp / "servers.json"),"--evidence",str(tmp / "evidence.json")],capture_output=True)
+            assert again.returncode != 0 and time.monotonic()-started < 2, "existing evidence must be refused before querying"
+            assert (tmp / "evidence.json").read_bytes() == before
+            unreachable = [dict(s,addresses=[{"protocol":"tcp","address":f"127.0.0.1:{free_port()}"}]) for s in servers]
+            (tmp / "unreachable.json").write_text(json.dumps({"servers":unreachable}))
+            failed = subprocess.run([str(binaries / "gnomon"),"measure","--servers",str(tmp / "unreachable.json"),"--evidence",str(tmp / "unused.json"),"--attempts","1","--timeout-seconds","1"],capture_output=True)
+            assert failed.returncode != 0 and not (tmp / "unused.json").exists(), "failed measurement must not leave an evidence file"
+            malfeasance(binaries,tmp)
+            if not docker_image:
+                expiry(binaries,tmp)
+            print("Independent UDP/TCP, fragmentation, pipelining, malformed-packet, client, six-response chain, evidence-file, malfeasance, and delegation-expiry checks passed")
         finally:
             for proc in processes:
                 if isinstance(proc,str):

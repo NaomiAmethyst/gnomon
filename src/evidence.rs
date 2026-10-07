@@ -16,10 +16,12 @@ pub struct Entry {
     pub request: String,
     pub response: String,
 }
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Evidence {
     pub responses: Vec<Entry>,
 }
+
 impl Evidence {
     pub fn push(
         &mut self,
@@ -35,6 +37,7 @@ impl Evidence {
             response: STANDARD.encode(response),
         });
     }
+
     pub fn verify(&self) -> Result<Vec<VerifiedTime>> {
         ensure!(
             !self.responses.is_empty() && self.responses.len() <= 2048,
@@ -71,6 +74,7 @@ impl Evidence {
         Ok(times)
     }
 }
+
 pub fn inconsistency(times: &[VerifiedTime]) -> Option<(usize, usize)> {
     for (j, later) in times.iter().enumerate() {
         for (i, earlier) in times[..j].iter().enumerate() {

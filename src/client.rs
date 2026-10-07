@@ -16,6 +16,7 @@ pub struct Address {
     pub protocol: String,
     pub address: String,
 }
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Server {
@@ -25,6 +26,7 @@ pub struct Server {
     pub public_key: String,
     pub addresses: Vec<Address>,
 }
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ServerList {
     pub servers: Vec<Server>,
@@ -33,6 +35,7 @@ pub struct ServerList {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reports: Option<String>,
 }
+
 impl ServerList {
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -92,6 +95,7 @@ impl ServerList {
         Ok(())
     }
 }
+
 pub fn decode_key(value: &str) -> Result<[u8; 32]> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     Ok(crate::wire::fixed(
@@ -100,6 +104,7 @@ pub fn decode_key(value: &str) -> Result<[u8; 32]> {
             .context("invalid base64 public key")?,
     )?)
 }
+
 pub fn retry_interval(failures: u32) -> Duration {
     Duration::from_secs_f64(
         1.5f64
@@ -107,17 +112,20 @@ pub fn retry_interval(failures: u32) -> Duration {
             .min(86400.0),
     )
 }
+
 #[derive(Debug)]
 pub struct Measurement {
     pub time: VerifiedTime,
     pub response: Vec<u8>,
     pub round_trip: Duration,
 }
+
 #[derive(Default)]
 pub struct Backoff {
     failures: u32,
     retry_after: Option<tokio::time::Instant>,
 }
+
 impl Backoff {
     pub fn failure(&mut self) {
         self.failures = self.failures.saturating_add(1);
@@ -128,11 +136,13 @@ impl Backoff {
             tokio::time::sleep_until(t).await;
         }
     }
+
     fn success(&mut self) {
         self.failures = 0;
         self.retry_after = None;
     }
 }
+
 /// Retry state persists until an authenticated, valid response is received.
 pub async fn query(
     addresses: &[Address],
@@ -150,11 +160,11 @@ pub async fn query(
     for attempt in 0..attempts {
         backoff.wait().await;
         let address = &addresses[attempt as usize % addresses.len()];
+        let round = attempt as usize / addresses.len();
         let start = Instant::now();
-        match tokio::time::timeout(timeout, exchange(address, key, request)).await {
+        match tokio::time::timeout(timeout, exchange(address, round, key, request)).await {
             Ok(Ok((response, time))) => {
                 let round_trip = start.elapsed();
-                ensure!(round_trip <= timeout, "maximum measurement delay exceeded");
                 backoff.success();
                 return Ok(Measurement {
                     time,
@@ -175,15 +185,18 @@ pub async fn query(
     Err(last.unwrap_or_else(|| anyhow::anyhow!("no request attempted")))
         .context("no authenticated time response")
 }
+
+/// Retries rotate through every resolved address, so one unreachable
+/// address family does not make a dual-stack server unusable.
 async fn exchange(
     address: &Address,
+    round: usize,
     key: &[u8; 32],
     request: &[u8],
 ) -> Result<(Vec<u8>, VerifiedTime)> {
-    let peer = lookup_host(&address.address)
-        .await?
-        .next()
-        .context("DNS returned no addresses")?;
+    let peers: Vec<_> = lookup_host(&address.address).await?.collect();
+    ensure!(!peers.is_empty(), "DNS returned no addresses");
+    let peer = peers[round % peers.len()];
     match address.protocol.as_str() {
         "udp" => {
             let socket = UdpSocket::bind(if peer.is_ipv4() {
