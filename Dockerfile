@@ -20,5 +20,5 @@ COPY tests/fixtures/LICENSE-RFC /usr/share/doc/gnomon/LICENSE-RFC
 COPY docs/ /usr/share/doc/gnomon/docs/
 USER 65532:65532
 EXPOSE 5319/udp 5319/tcp
+# Configure with GNOMON_* environment variables, or mount /etc/gnomon/gnomon.toml.
 ENTRYPOINT ["/usr/bin/gnomond"]
-CMD ["--config", "/etc/gnomon/gnomon.toml"]

@@ -1,4 +1,7 @@
 # Configure this file before starting gnomond. All paths are absolute.
+# Any field can instead be set by an environment variable named GNOMON_ plus
+# the upper-case field name (for example GNOMON_RADIUS_SECONDS=5), which
+# overrides this file. Values shown are the defaults, except root_public_key.
 listen = "0.0.0.0:5319"
 online_key = "/etc/gnomon/online.key"
 certificate = "/etc/gnomon/delegation.cert"

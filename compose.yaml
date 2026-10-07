@@ -13,6 +13,20 @@ services:
     ports:
       - "5319:5319/udp"
       - "5319:5319/tcp"
+    # Every daemon setting is a GNOMON_<FIELD> variable; see
+    # packaging/gnomon.toml.example for fields and defaults. Optional settings
+    # are passed through from .env or the shell only when set.
+    environment:
+      - GNOMON_ROOT_PUBLIC_KEY=${GNOMON_ROOT_PUBLIC_KEY:?Set the pinned root public key}
+      - GNOMON_RADIUS_SECONDS
+      - GNOMON_REQUIRE_SYNCHRONIZED_CLOCK
+      - GNOMON_MAX_SIGNATURES_PER_SECOND
+      - GNOMON_MAX_REQUESTS_PER_SECOND_PER_SOURCE
+      - GNOMON_MAX_CONNECTIONS
+      - GNOMON_QUEUE_CAPACITY
+      - GNOMON_IO_TIMEOUT_SECONDS
+    # online.key and delegation.cert, at the default GNOMON_ONLINE_KEY and
+    # GNOMON_CERTIFICATE paths.
     volumes:
       - ./deployment:/etc/gnomon:ro
     healthcheck:

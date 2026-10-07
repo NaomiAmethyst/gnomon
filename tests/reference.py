@@ -200,13 +200,14 @@ def smoke(binaries, docker_image=None, docker_sudo=False):
                 now = int(time.time())
                 (folder / "delegation.cert").write_bytes(certificate(root,online,now-60,now+3600))
                 port = free_port()
-                paths = pathlib.Path("/etc/gnomon") if docker_image else folder
-                (folder / "gnomon.toml").write_text(f'listen = "0.0.0.0:{port}"\nonline_key = "{paths}/online.key"\ncertificate = "{paths}/delegation.cert"\nroot_public_key = "{b64(public(root))}"\nrequire_synchronized_clock = false\n')
                 if docker_image:
+                    # Containers are configured only through the environment.
                     name = f"gnomon-smoke-{os.getpid()}-{i}"
-                    subprocess.run(docker+["run","--detach","--name",name,"--network","host","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--user",f"{os.getuid()}:{os.getgid()}","--mount",f"type=bind,src={folder},dst=/etc/gnomon,readonly",docker_image],check=True,stdout=subprocess.DEVNULL)
+                    env = {"GNOMON_LISTEN":f"0.0.0.0:{port}","GNOMON_ROOT_PUBLIC_KEY":b64(public(root)),"GNOMON_REQUIRE_SYNCHRONIZED_CLOCK":"false"}
+                    subprocess.run(docker+["run","--detach","--name",name,"--network","host","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--user",f"{os.getuid()}:{os.getgid()}","--mount",f"type=bind,src={folder},dst=/etc/gnomon,readonly"]+[a for k,v in env.items() for a in ("--env",f"{k}={v}")]+[docker_image],check=True,stdout=subprocess.DEVNULL)
                     processes.append(name)
                 else:
+                    (folder / "gnomon.toml").write_text(f'listen = "0.0.0.0:{port}"\nonline_key = "{folder}/online.key"\ncertificate = "{folder}/delegation.cert"\nroot_public_key = "{b64(public(root))}"\nrequire_synchronized_clock = false\n')
                     log = (folder / "daemon.log").open("w")
                     processes.append(subprocess.Popen([str(binaries / "gnomond"),"--config",str(folder / "gnomon.toml")],stdout=log,stderr=log))
                     log.close()

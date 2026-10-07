@@ -2,8 +2,10 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(version, about = "RFC 10049 UDP/TCP Roughtime daemon")]
 struct Args {
-    #[arg(short, long, default_value = "/etc/gnomon/gnomon.toml")]
-    config: std::path::PathBuf,
+    /// Config file [default: /etc/gnomon/gnomon.toml if it exists]. Every
+    /// setting can instead be given as GNOMON_<FIELD>, which overrides the file.
+    #[arg(short, long, env = "GNOMON_CONFIG")]
+    config: Option<std::path::PathBuf>,
     /// Validate configuration, key material, delegation, and current clock, then exit.
     #[arg(long)]
     check: bool,
@@ -17,7 +19,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
-    let c = gnomon::server::Config::read(&args.config)?;
+    let default = std::path::Path::new(gnomon::server::DEFAULT_CONFIG);
+    let path = match args.config {
+        Some(path) => Some(path),
+        None => default.try_exists()?.then(|| default.to_path_buf()),
+    };
+    let c = gnomon::server::Config::load(path.as_deref())?;
     if args.check {
         let id = c.identity()?;
         gnomon::server::check_clock(&c)?;

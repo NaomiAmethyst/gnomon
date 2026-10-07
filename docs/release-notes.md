@@ -1,4 +1,4 @@
-Gnomon provides an RFC 10049 version 1 UDP/TCP Roughtime daemon, pinned client,
+Gnomon 0.1.1 provides an RFC 10049 version 1 UDP/TCP Roughtime daemon, pinned client,
 offline key-delegation tools, and chained evidence generation/verification.
 
 Assets include amd64/arm64 Debian and RPM packages, static Linux tarballs,

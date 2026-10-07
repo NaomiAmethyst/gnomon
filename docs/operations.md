@@ -33,7 +33,9 @@ Transfer the certificate and root **public** key to the server. Keep `root.key` 
 
 ## Configuration
 
-Copy `packaging/gnomon.toml.example` to `/etc/gnomon/gnomon.toml`. Set `root_public_key` to `root.pub` and provision `online.key` and `delegation.cert` at the configured paths. All fields are documented in that example; unknown fields cause an error. `listen` is a numeric socket address: `0.0.0.0:5319` for IPv4 or `[::]:5319` for IPv6. IPv4 acceptance on an IPv6 wildcard depends on host dual-stack settings. One identity and listen address are supported per process; run additional instances for multiple identities.
+Copy `packaging/gnomon.toml.example` to `/etc/gnomon/gnomon.toml`. Set `root_public_key` to `root.pub` and provision `online.key` and `delegation.cert` at the configured paths. All fields are documented in that example; unknown fields cause an error.
+
+Every field can also be set by an environment variable named `GNOMON_` plus the upper-case field name, such as `GNOMON_ROOT_PUBLIC_KEY`, `GNOMON_LISTEN`, or `GNOMON_RADIUS_SECONDS`. Environment variables override the file, and values are parsed as the field's type (`true`/`false` for booleans). `gnomond` reads `--config` or `GNOMON_CONFIG` if given, otherwise `/etc/gnomon/gnomon.toml` if it exists, otherwise only defaults and the environment. Unknown or misspelled `GNOMON_*` variables cause an error rather than being ignored. The online key and certificate are always files; their paths are `GNOMON_ONLINE_KEY` and `GNOMON_CERTIFICATE`. Do not put key material itself in the environment. `listen` is a numeric socket address: `0.0.0.0:5319` for IPv4 or `[::]:5319` for IPv6. IPv4 acceptance on an IPv6 wildcard depends on host dual-stack settings. One identity and listen address are supported per process; run additional instances for multiple identities.
 
 The packet cap is 4096 bytes. Requests with messages shorter than 1024 bytes are silently dropped on both transports. Connections, signing queue capacity, signatures per second, and requests per second per source have explicit bounds. `max_signatures_per_second` paces signing instead of dropping requests: each signature covers up to 32 queued requests, so under load batches fill up and requests are only dropped when the queue is full. `max_requests_per_second_per_source` applies one-second windows to each IPv4 address or IPv6 /64, hashed into a fixed table with a per-process random key; unrelated sources occasionally share a window. Because UDP source addresses can be spoofed, an attacker can exhaust another address's window, and these limits do not defeat link saturation. Use firewall rate limits at the network edge for an exposed server. TCP read, queue, and write operations share a per-request deadline, and each TCP connection can issue multiple requests.
 
@@ -58,15 +60,22 @@ Ensure TCP and UDP port 5319 are permitted by your firewall. Verify with a pinne
 
 ## Docker / Compose
 
-The scratch image contains only static binaries, documentation, and license. The default UID/GID is 65532. Create a `deployment/` directory with the three configuration files above and ensure the online seed is owned by UID 65532 with mode 0600; config/certificate may be 0644. Directory traversal permission must permit UID 65532. Do not make the private seed world-readable.
+The scratch image contains only static binaries, documentation, and license. The default UID/GID is 65532. Containers are configured with `GNOMON_*` environment variables; no config file is needed. Create a `deployment/` directory containing `online.key` and `delegation.cert`, which are mounted at their default paths under `/etc/gnomon`. Ensure the online seed is owned by UID 65532 with mode 0600; the certificate may be 0644. Directory traversal permission must permit UID 65532. Do not make the private seed world-readable.
+
+Compose requires `GNOMON_ROOT_PUBLIC_KEY` and passes through any other daemon setting that is set in `.env` or the shell; unset settings use the daemon defaults. For example:
 
 ```sh
 sudo chown 65532:65532 deployment/online.key
 chmod 600 deployment/online.key
-export GNOMON_ROOT_PUBLIC_KEY="$(cat root.pub)"
+cat > .env <<EOF
+GNOMON_ROOT_PUBLIC_KEY=$(cat root.pub)
+GNOMON_RADIUS_SECONDS=5
+EOF
 docker compose up -d
 docker compose logs -f
 ```
+
+To set the listen address or key paths in Compose, add `GNOMON_LISTEN`, `GNOMON_ONLINE_KEY`, or `GNOMON_CERTIFICATE` to its `environment` list and adjust the port mapping or volume to match. Mounting a `gnomon.toml` at `/etc/gnomon/gnomon.toml` also still works; environment variables override it.
 
 For a direct invocation:
 
@@ -75,10 +84,11 @@ docker run --read-only --cap-drop ALL --security-opt no-new-privileges \
   --pids-limit 64 --memory 128m \
   -p 5319:5319/udp -p 5319:5319/tcp \
   --mount type=bind,src="$PWD/deployment",dst=/etc/gnomon,readonly \
-  ghcr.io/naomiamethyst/gnomon:v0.1.0
+  --env GNOMON_ROOT_PUBLIC_KEY="$(cat root.pub)" \
+  ghcr.io/naomiamethyst/gnomon:v0.1.1
 ```
 
-Compose's healthcheck makes an authenticated local UDP query and needs `GNOMON_ROOT_PUBLIC_KEY`. A scratch container has no shell; use `--entrypoint /usr/bin/gnomon` to run client/key commands. Run provisioning commands with a writable directory mount and the appropriate UID. Key tools never need network access.
+Compose's healthcheck makes an authenticated local UDP query with the same `GNOMON_ROOT_PUBLIC_KEY`. A scratch container has no shell; use `--entrypoint /usr/bin/gnomon` to run client/key commands. Run provisioning commands with a writable directory mount and the appropriate UID. Key tools never need network access.
 
 ## Rotation and monitoring
 

@@ -38,11 +38,12 @@ GitHub Actions builds `.deb`, `.rpm`, and static tarballs for Linux amd64/arm64,
 
 ```sh
 docker build -t gnomon .
-# Place config, certificate, and online seed in deployment/ first.
+# Place the certificate and online seed in deployment/ first.
+# Any setting can be given as GNOMON_<FIELD>, e.g. GNOMON_RADIUS_SECONDS=5.
 GNOMON_ROOT_PUBLIC_KEY=BASE64_ROOT_PUBLIC_KEY docker compose up -d
 ```
 
-The systemd unit uses a dynamic user and credentials to read a root-owned seed. Container configuration is mounted read-only; see [operations](docs/operations.md) for ownership and clock requirements. Package installation leaves the service stopped until configured.
+The systemd unit uses a dynamic user and credentials to read a root-owned seed. Containers are configured with `GNOMON_*` environment variables and read-only key mounts; see [operations](docs/operations.md) for ownership and clock requirements. Package installation leaves the service stopped until configured.
 
 ## Documentation
 

@@ -5,8 +5,9 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsString,
     hash::{BuildHasher, RandomState},
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -23,7 +24,9 @@ use tokio::{
     task::JoinSet,
 };
 
-#[derive(Debug, Deserialize)]
+/// Daemon settings. Each field can also be set by an environment variable
+/// named `GNOMON_` plus the upper-case field name, which overrides the file.
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub listen: SocketAddr,
@@ -57,13 +60,62 @@ impl Default for Config {
     }
 }
 
+pub const DEFAULT_CONFIG: &str = "/etc/gnomon/gnomon.toml";
+const ENV_PREFIX: &str = "GNOMON_";
+/// `GNOMON_` variables that are not configuration fields.
+const NON_FIELD_ENV: &[&str] = &["GNOMON_CONFIG"];
+
 impl Config {
-    pub fn read(path: &Path) -> Result<Self> {
-        ensure!(
-            std::fs::metadata(path)?.len() <= 65536,
-            "config file too large"
-        );
-        let c: Self = toml::from_str(&std::fs::read_to_string(path)?)?;
+    /// Reads the optional config file, then applies `GNOMON_*` overrides.
+    pub fn load(path: Option<&Path>) -> Result<Self> {
+        Self::load_with_env(path, std::env::vars_os())
+    }
+
+    fn load_with_env(
+        path: Option<&Path>,
+        env: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> Result<Self> {
+        let mut table = match path {
+            Some(path) => {
+                ensure!(
+                    std::fs::metadata(path)?.len() <= 65536,
+                    "config file too large"
+                );
+                toml::from_str(&std::fs::read_to_string(path)?)
+                    .with_context(|| format!("parse {}", path.display()))?
+            }
+            None => toml::Table::new(),
+        };
+        // Serializing the defaults gives every field's name and type, so new
+        // fields get an environment variable automatically.
+        let fields = toml::Table::try_from(Self::default())?;
+        for (name, value) in env {
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(field) = name.strip_prefix(ENV_PREFIX) else {
+                continue;
+            };
+            if NON_FIELD_ENV.contains(&name) {
+                continue;
+            }
+            let key = field.to_ascii_lowercase();
+            let default = fields
+                .get(&key)
+                .filter(|_| field == key.to_ascii_uppercase())
+                .with_context(|| format!("unknown configuration variable {name}"))?;
+            let value = value
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("{name} is not valid UTF-8"))?;
+            table.insert(key, env_value(name, &value, default)?);
+        }
+        let c: Self = table.try_into()?;
+        c.validate()?;
+        Ok(c)
+    }
+
+    fn validate(&self) -> Result<()> {
+        let c = self;
         ensure!(
             c.radius_seconds >= 3,
             "radius must be at least 3 seconds without a leap-second source"
@@ -81,7 +133,7 @@ impl Config {
             (1..=300).contains(&c.io_timeout_seconds),
             "I/O timeout out of range"
         );
-        Ok(c)
+        Ok(())
     }
 
     pub fn identity(&self) -> Result<Identity> {
@@ -90,8 +142,10 @@ impl Config {
                 .decode(&self.root_public_key)
                 .context("decode root_public_key")?,
         )?;
-        let online = if let Some(path) = std::env::var_os("GNOMON_ONLINE_KEY") {
-            keys::load(&PathBuf::from(path))?
+        // An explicit GNOMON_ONLINE_KEY (already applied to online_key) takes
+        // precedence over a systemd credential.
+        let online = if std::env::var_os("GNOMON_ONLINE_KEY").is_some() {
+            keys::load(&self.online_key)?
         } else if let Some(dir) = std::env::var_os("CREDENTIALS_DIRECTORY") {
             keys::load_credential(&PathBuf::from(dir).join("online.key"))?
         } else {
@@ -107,6 +161,26 @@ impl Config {
             root,
         )?)
     }
+}
+
+/// Parses an environment variable as the same TOML type as the field's default.
+fn env_value(name: &str, value: &str, default: &toml::Value) -> Result<toml::Value> {
+    Ok(match default {
+        toml::Value::String(_) => toml::Value::String(value.to_owned()),
+        toml::Value::Integer(_) => toml::Value::Integer(
+            value
+                .trim()
+                .parse()
+                .with_context(|| format!("{name} must be an integer"))?,
+        ),
+        toml::Value::Boolean(_) => toml::Value::Boolean(
+            value
+                .trim()
+                .parse()
+                .with_context(|| format!("{name} must be true or false"))?,
+        ),
+        _ => anyhow::bail!("{name} cannot be set from the environment"),
+    })
 }
 
 pub fn unix_time() -> Result<u64> {
@@ -607,5 +681,66 @@ mod tests {
         let mut limiter = SourceLimiter::new(1);
         assert!(limiter.allow(v4));
         assert!(!limiter.allow(mapped));
+    }
+
+    fn env(vars: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        vars.iter().map(|(k, v)| (k.into(), v.into())).collect()
+    }
+
+    #[test]
+    fn environment_overrides_file_for_every_field_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gnomon.toml");
+        std::fs::write(&path, "radius_seconds = 10\nroot_public_key = \"file\"\n").unwrap();
+        let c = Config::load_with_env(
+            Some(&path),
+            env(&[
+                ("GNOMON_RADIUS_SECONDS", "5"),
+                ("GNOMON_LISTEN", "[::1]:9999"),
+                ("GNOMON_REQUIRE_SYNCHRONIZED_CLOCK", "false"),
+                ("GNOMON_ONLINE_KEY", "/keys/online.key"),
+                ("GNOMON_CONFIG", "ignored"),
+                ("OTHER", "ignored"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(c.radius_seconds, 5);
+        assert_eq!(c.root_public_key, "file");
+        assert_eq!(c.listen, "[::1]:9999".parse().unwrap());
+        assert!(!c.require_synchronized_clock);
+        assert_eq!(c.online_key, PathBuf::from("/keys/online.key"));
+    }
+
+    #[test]
+    fn environment_alone_is_enough() {
+        let c = Config::load_with_env(None, env(&[("GNOMON_ROOT_PUBLIC_KEY", "key")])).unwrap();
+        assert_eq!(c.root_public_key, "key");
+        assert_eq!(c.queue_capacity, Config::default().queue_capacity);
+    }
+
+    #[test]
+    fn every_field_has_a_supported_environment_type() {
+        let fields = toml::Table::try_from(Config::default()).unwrap();
+        for (key, value) in &fields {
+            let name = format!("GNOMON_{}", key.to_ascii_uppercase());
+            let text = value
+                .as_str()
+                .map_or_else(|| value.to_string(), str::to_owned);
+            env_value(&name, &text, value).unwrap();
+        }
+    }
+
+    #[test]
+    fn invalid_environment_is_rejected() {
+        for vars in [
+            &[("GNOMON_RADIUS", "5")][..],
+            &[("GNOMON_radius_seconds", "5")],
+            &[("GNOMON_RADIUS_SECONDS", "five")],
+            &[("GNOMON_RADIUS_SECONDS", "1")],
+            &[("GNOMON_REQUIRE_SYNCHRONIZED_CLOCK", "yes")],
+            &[("GNOMON_LISTEN", "nowhere")],
+        ] {
+            assert!(Config::load_with_env(None, env(vars)).is_err(), "{vars:?}");
+        }
     }
 }

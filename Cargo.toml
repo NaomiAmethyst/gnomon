@@ -1,6 +1,6 @@
 [package]
 name = "gnomon"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Naomi Persephone Amethyst <naomi@amethyst.name>"]
@@ -13,7 +13,7 @@ default-run = "gnomon"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
 libc = "0.2"
 rand = "0.8"
