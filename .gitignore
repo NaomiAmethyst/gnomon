@@ -1,0 +1,11 @@
+/target/
+/dist/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
+*.key
+*.cert
+gnomon-evidence*.json
+gnomon.toml
+__pycache__/
+/.validation/

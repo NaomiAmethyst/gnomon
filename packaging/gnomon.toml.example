@@ -1,0 +1,11 @@
+# Configure this file before starting gnomond. All paths are absolute.
+listen = "0.0.0.0:5319"
+online_key = "/etc/gnomon/online.key"
+certificate = "/etc/gnomon/delegation.cert"
+root_public_key = "REPLACE_WITH_BASE64_ROOT_PUBLIC_KEY"
+radius_seconds = 3
+require_synchronized_clock = true
+max_requests_per_second = 1000
+max_connections = 128
+queue_capacity = 256
+io_timeout_seconds = 5

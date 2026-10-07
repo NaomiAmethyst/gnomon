@@ -1,0 +1,10 @@
+.git
+target
+dist
+fuzz
+**/*.key
+**/*.cert
+gnomon.toml
+gnomon-evidence*.json
+.validation
+**/__pycache__

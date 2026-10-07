@@ -1,0 +1,16 @@
+Gnomon
+Copyright (C) 2026 Naomi Persephone Amethyst <naomi@amethyst.name>
+Licensed under the GNU Affero General Public License version 3 only.
+See LICENSE.
+
+tests/fixtures/rfc10049-appendix-b.json is an example extracted from
+RFC 10049, Appendix B; whitespace inside base64 values was removed.
+Copyright (c) 2026 IETF Trust and the persons identified as the document
+authors (Watson Ladd and Marcus Dansarie). All rights reserved.
+It is distributed under the Revised BSD License in
+tests/fixtures/LICENSE-RFC, as required for Code Components by the
+IETF Trust Legal Provisions Relating to IETF Documents.
+
+The Python reference implementation and reference-v1.json fixture are
+original Gnomon code/data licensed under AGPL-3.0-only. Their deterministic
+seeds are for tests only.
