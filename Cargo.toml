@@ -12,7 +12,7 @@ default-run = "gnomon"
 
 [dependencies]
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
 libc = "0.2"
