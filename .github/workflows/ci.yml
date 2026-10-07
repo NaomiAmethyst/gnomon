@@ -105,7 +105,7 @@ jobs:
           version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']
           assert os.environ['RELEASE_TAG'] == 'v' + version, 'tag must match Cargo.toml version'
           PY
-      - uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-path: dist/*
