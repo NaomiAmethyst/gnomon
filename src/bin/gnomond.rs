@@ -2,8 +2,9 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(version, about = "RFC 10049 UDP/TCP Roughtime daemon")]
 struct Args {
-    /// Config file [default: /etc/gnomon/gnomon.toml if it exists]. Every
-    /// setting can instead be given as GNOMON_<FIELD>, which overrides the file.
+    /// Config file [default: /etc/gnomon/gnomon.toml if it exists]. Any setting
+    /// can instead be given as GNOMON_ plus the upper-case field name, which
+    /// overrides the file.
     #[arg(short, long, env = "GNOMON_CONFIG")]
     config: Option<std::path::PathBuf>,
     /// Validate configuration, key material, delegation, and current clock, then exit.

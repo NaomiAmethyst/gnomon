@@ -85,7 +85,7 @@ docker run --read-only --cap-drop ALL --security-opt no-new-privileges \
   -p 5319:5319/udp -p 5319:5319/tcp \
   --mount type=bind,src="$PWD/deployment",dst=/etc/gnomon,readonly \
   --env GNOMON_ROOT_PUBLIC_KEY="$(cat root.pub)" \
-  ghcr.io/naomiamethyst/gnomon:v0.1.1
+  ghcr.io/naomiamethyst/gnomon:v0.1.2
 ```
 
 Compose's healthcheck makes an authenticated local UDP query with the same `GNOMON_ROOT_PUBLIC_KEY`. A scratch container has no shell; use `--entrypoint /usr/bin/gnomon` to run client/key commands. Run provisioning commands with a writable directory mount and the appropriate UID. Key tools never need network access.
